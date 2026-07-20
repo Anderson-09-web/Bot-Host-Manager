@@ -10,8 +10,9 @@ echo "════════════════════════�
 echo ""
 
 # ── 1. Node / pnpm ────────────────────────────────────────────────────────────
-echo "→ Installing pnpm..."
-npm install -g pnpm@10 --silent
+echo "→ Enabling pnpm via corepack..."
+corepack enable
+corepack prepare pnpm@latest --activate
 
 echo "→ Installing Node dependencies..."
 pnpm install --frozen-lockfile
@@ -24,7 +25,7 @@ echo "   Built to: artifacts/discord-panel/dist/public"
 
 # ── 3. Python dependencies ────────────────────────────────────────────────────
 echo "→ Installing Python dependencies..."
-pip install --upgrade pip --quiet
+pip install --upgrade pip
 pip install -r artifacts/api-server/requirements.txt
 
 echo ""
