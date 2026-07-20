@@ -115,7 +115,14 @@ class BotManager:
         }
 
     async def sync_files_from_r2(self):
-        """Download all bot files from R2 to the work directory."""
+        """Download bot files from R2, preserving locally modified files.
+
+        Files are only downloaded if they don't exist locally, or if the R2
+        version is strictly newer than the local copy. This ensures that files
+        modified at runtime (e.g. data files written by the bot) survive restarts,
+        and that files edited via the panel editor (which saves to R2 first) are
+        picked up on the next start.
+        """
         from app.services.r2_service import r2_service
 
         self.work_dir.mkdir(parents=True, exist_ok=True)
@@ -123,15 +130,34 @@ class BotManager:
 
         try:
             objects = await r2_service.list_objects(prefix="")
+            synced = 0
+            preserved = 0
             for obj in objects:
                 key = obj["Key"]
+                # Skip R2 folder marker objects
+                if key.endswith("/"):
+                    continue
                 local_path = self.work_dir / key
                 local_path.parent.mkdir(parents=True, exist_ok=True)
+
+                # Preserve local file if it's the same age or newer than R2
+                if local_path.exists():
+                    r2_mtime = obj.get("LastModified")
+                    if r2_mtime is not None:
+                        local_mtime = datetime.fromtimestamp(
+                            local_path.stat().st_mtime, tz=timezone.utc
+                        )
+                        if local_mtime >= r2_mtime:
+                            preserved += 1
+                            continue  # Local copy is up-to-date or newer — keep it
+
                 data = await r2_service.get_object(key)
                 if data is not None:
                     local_path.write_bytes(data)
+                    synced += 1
 
-            await self._broadcast_log(f"Synced {len(objects)} files from R2.", "INFO")
+            msg = f"Sync complete: {synced} downloaded, {preserved} preserved (local is current)."
+            await self._broadcast_log(msg, "INFO")
         except Exception as e:
             logger.error("Failed to sync files from R2: %s", e)
             await self._broadcast_log(f"R2 sync failed: {e}", "ERROR")

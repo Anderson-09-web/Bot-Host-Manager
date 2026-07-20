@@ -126,7 +126,7 @@ class R2StorageService:
             client.delete_object(Bucket=self.bucket, Key=key)
 
         try:
-            await _delete()
+            await _run_in_executor(_delete)
             return True
         except ClientError as e:
             logger.error("R2 delete_object error for key=%s: %s", key, e)
