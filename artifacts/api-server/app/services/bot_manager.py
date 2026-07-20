@@ -132,6 +132,10 @@ class BotManager:
             objects = await r2_service.list_objects(prefix="")
             synced = 0
             preserved = 0
+
+            # Build set of R2 keys (files only, no folder markers)
+            r2_keys = {obj["Key"] for obj in objects if not obj["Key"].endswith("/")}
+
             for obj in objects:
                 key = obj["Key"]
                 # Skip R2 folder marker objects
@@ -156,7 +160,27 @@ class BotManager:
                     local_path.write_bytes(data)
                     synced += 1
 
-            msg = f"Sync complete: {synced} downloaded, {preserved} preserved (local is current)."
+            # Remove local files that were deleted from R2
+            removed = 0
+            for local_file in list(self.work_dir.rglob("*")):
+                if not local_file.is_file():
+                    continue
+                rel = local_file.relative_to(self.work_dir).as_posix()
+                if rel not in r2_keys:
+                    try:
+                        local_file.unlink()
+                        removed += 1
+                    except Exception as rm_err:
+                        logger.warning("Could not remove stale local file %s: %s", rel, rm_err)
+            # Clean up empty directories left behind
+            for local_dir in sorted(self.work_dir.rglob("*"), reverse=True):
+                if local_dir.is_dir() and local_dir != self.work_dir:
+                    try:
+                        local_dir.rmdir()  # only removes if empty
+                    except OSError:
+                        pass
+
+            msg = f"Sync complete: {synced} downloaded, {preserved} preserved, {removed} removed (deleted from R2)."
             await self._broadcast_log(msg, "INFO")
         except Exception as e:
             logger.error("Failed to sync files from R2: %s", e)

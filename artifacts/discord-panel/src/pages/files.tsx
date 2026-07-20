@@ -175,7 +175,16 @@ export default function Files() {
       copyFile.mutate({ data: { source: dialogState.path, destination: dialogInput } }, { onSuccess: () => { refetch(); closeDialog(); } });
     } else if (dialogState.type === "delete") {
       deleteFile.mutate({ params: { path: dialogState.path } }, {
-        onSuccess: () => { if (selectedFile === dialogState.path) setSelectedFile(null); refetch(); closeDialog(); },
+        onSuccess: () => {
+          if (selectedFile === dialogState.path) {
+            setSelectedFile(null);
+            // Reset so the same path can be re-opened cleanly later
+            initializedRef.current = null;
+            setEditorContent("");
+          }
+          refetch();
+          closeDialog();
+        },
       });
     }
   };
