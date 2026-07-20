@@ -1,0 +1,54 @@
+## Render Blueprint — Discord Bot Hosting Panel
+## Deploy at: https://dashboard.render.com/blueprint/new
+## Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: discord-bot-panel
+    runtime: python
+    region: oregon          # change to: frankfurt, singapore, ohio, virginia
+    plan: free              # upgrade to starter ($7/mo) to avoid spin-down
+    buildCommand: bash build.sh
+    startCommand: >-
+      cd artifacts/api-server &&
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port $PORT
+      --workers 1
+      --log-level info
+
+    envVars:
+      # ── Required — set these in the Render dashboard (never commit real values) ──
+      - key: NEON_DATABASE_URL
+        sync: false          # Render will prompt you to fill this in
+
+      - key: JWT_SECRET_KEY
+        sync: false          # Any long random string (64+ chars recommended)
+
+      - key: R2_ACCOUNT_ID
+        sync: false
+
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+
+      - key: R2_BUCKET_NAME
+        sync: false
+
+      - key: R2_ENDPOINT_URL
+        sync: false          # e.g. https://<account_id>.r2.cloudflarestorage.com
+
+      # ── Optional — defaults are fine but you can override ─────────────────────
+      - key: ENVIRONMENT
+        value: production
+
+      - key: LOG_LEVEL
+        value: INFO
+
+      - key: STATIC_FILES_DIR
+        value: ../discord-panel/dist/public
+
+      - key: CORS_ORIGINS
+        value: "*"           # Lock this down to your Render URL once deployed

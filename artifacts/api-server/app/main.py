@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request, Response, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import settings
@@ -163,3 +164,23 @@ async def api_root():
         "docs": "/api/docs",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# ── Static frontend (production / Render) ────────────────────────────────────
+# Mounted LAST so /api/* routes take priority.
+# Set STATIC_FILES_DIR env var to the built React dist directory.
+import os
+from pathlib import Path
+
+_static_dir = os.environ.get("STATIC_FILES_DIR", "")
+if _static_dir:
+    _static_path = Path(_static_dir)
+    if _static_path.exists() and _static_path.is_dir():
+        app.mount(
+            "/",
+            StaticFiles(directory=str(_static_path), html=True),
+            name="static",
+        )
+        logger.info("Serving frontend static files from: %s", _static_path.resolve())
+    else:
+        logger.warning("STATIC_FILES_DIR set but path not found: %s", _static_dir)
