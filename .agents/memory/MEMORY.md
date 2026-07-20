@@ -1,0 +1,5 @@
+- [bcrypt-passlib-incompatibility](bcrypt-passlib-incompatibility.md) — passlib fails with bcrypt>=4.0.0; use bcrypt directly instead.
+- [python-jose-blocked](python-jose-blocked.md) — python-jose is blocked by Replit package firewall; use PyJWT instead.
+- [r2-file-storage-pattern](r2-file-storage-pattern.md) — all bot files live in R2; synced to temp work dir on bot start.
+- [orval-upload-download-exclusion](orval-upload-download-exclusion.md) — multipart upload and binary download excluded from OpenAPI spec to avoid Orval TS collisions.
+- [neon-database-url-key](neon-database-url-key.md) — use NEON_DATABASE_URL not DATABASE_URL to avoid Replit managed Postgres conflict.

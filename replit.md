@@ -1,45 +1,94 @@
-# [Project name]
+# Discord Bot Hosting Panel
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A professional self-hosted web panel for managing Python Discord bots — upload files, control the bot process, edit code in-browser, stream real-time logs, manage environment variables, and view system metrics. No terminal needed.
+
+## Default Credentials
+
+- **Username:** `admin`
+- **Password:** `admin123`
+
+Change this immediately in production via the Settings page or directly in the database.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- `pnpm --filter @workspace/discord-panel run dev` — React frontend (preview path `/`)
+- `pnpm --filter @workspace/api-server run dev` — Python FastAPI backend (port 8080, path `/api`)
+- `pnpm --filter @workspace/api-spec run codegen` — Regenerate API hooks and Zod schemas from OpenAPI spec
+- `pnpm run typecheck` — Typecheck all packages
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- **Frontend:** React + Vite + TypeScript + TailwindCSS v4 + Wouter (routing)
+- **Backend:** Python 3.11 + FastAPI + Uvicorn (with `--reload` in dev)
+- **Database:** Neon PostgreSQL — async SQLAlchemy + asyncpg; env var: `NEON_DATABASE_URL`
+- **File storage:** Cloudflare R2 (S3-compatible via boto3); env vars: `R2_*`
+- **Auth:** JWT (PyJWT + bcrypt) — token stored in localStorage, injected via `setAuthTokenGetter`
+- **API codegen:** Orval — generates React Query hooks from `lib/api-spec/openapi.yaml`
 
-## Where things live
+## Where Things Live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+```
+artifacts/api-server/          # Python FastAPI backend
+  app/
+    main.py                    # FastAPI app, CORS, routers, WebSockets, lifespan
+    core/
+      config.py                # Pydantic settings (reads all env vars)
+      database.py              # Async SQLAlchemy engine, init_db(), seeding
+      security.py              # hash_password, verify_password, JWT, get_current_user_id
+    models/                    # SQLAlchemy ORM models (User, EnvVar, LogEntry, AuditLog, BotConfig)
+    services/
+      bot_manager.py           # Subprocess manager: start/stop/restart/kill, stdout streaming
+      r2_storage.py            # Cloudflare R2 operations via boto3
+      metrics_service.py       # psutil CPU/RAM/disk snapshot
+    api/
+      routes/                  # auth, bot, files, env_vars, metrics, logs, config, audit, health
+      websockets/              # console.py (live logs), metrics.py (live stats)
 
-## Architecture decisions
+artifacts/discord-panel/       # React frontend
+  src/
+    lib/auth.tsx               # AuthProvider, useAuth, setAuthTokenGetter wiring
+    pages/                     # login, dashboard, files, console, env-vars, settings, not-found
+    components/layout.tsx      # Persistent sidebar + top bar
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+lib/api-spec/openapi.yaml      # Source of truth for all API contracts
+lib/api-client-react/          # Generated Orval hooks (do not edit manually)
+```
 
-## Product
+## Architecture Decisions
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- **NEON_DATABASE_URL** (not `DATABASE_URL`) to avoid conflict with Replit's managed Postgres key.
+- **R2 for all file storage** — no permanent local disk. Bot files are synced from R2 to a temp work dir on each start.
+- **python-jose was blocked** by Replit's package firewall — replaced with `PyJWT` + `bcrypt` directly (no passlib).
+- **Upload/download endpoints excluded from OpenAPI spec** — multipart and binary responses cause Orval TS type collisions; those routes are called natively from the frontend with `fetch + FormData`.
+- **WebSocket auth** via `?token=<jwt>` query param (not header, since browser WebSocket API doesn't support custom headers).
+- **Bot work dir** is a temp directory that gets refreshed from R2 on every start — no persistent local bot files.
 
-## User preferences
+## Environment Variables Required
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+| Variable | Purpose |
+|---|---|
+| `NEON_DATABASE_URL` | Neon Postgres connection string |
+| `R2_ACCOUNT_ID` | Cloudflare R2 account ID |
+| `R2_ACCESS_KEY_ID` | R2 access key |
+| `R2_SECRET_ACCESS_KEY` | R2 secret key |
+| `R2_BUCKET_NAME` | R2 bucket name |
+| `R2_ENDPOINT_URL` | R2 S3-compatible endpoint |
+| `JWT_SECRET_KEY` | Secret for signing JWT tokens |
+| `SESSION_SECRET` | Session secret (set by Replit) |
+| `ENVIRONMENT` | `development` or `production` |
+| `LOG_LEVEL` | `INFO`, `DEBUG`, `WARNING`, etc. |
+| `CORS_ORIGINS` | Comma-separated allowed origins |
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- After adding/removing env vars in the panel, restart the bot for changes to take effect.
+- `passlib` does NOT work with `bcrypt>=4.0.0` in Replit — use bcrypt directly (already done).
+- The api-server dev script runs `bash start.sh` which calls `uvicorn` — not Node.js.
+- To regenerate hooks after editing the OpenAPI spec: `pnpm --filter @workspace/api-spec run codegen`.
 
-## Pointers
+## User Preferences
 
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- Stack: Python FastAPI backend, React/Vite frontend, Neon PostgreSQL, Cloudflare R2.
+- Dark mode only. No emojis anywhere in the UI.
+- Mission Control / cockpit aesthetic — deep navy/slate + electric indigo/violet.
+- Monospace fonts for all code, logs, and metrics.

@@ -1,4 +1,4 @@
-modules = ["nodejs-24"]
+modules = ["nodejs-24", "python-3.11"]
 
 [deployment]
 router = "application"
@@ -18,3 +18,21 @@ expertMode = true
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
+
+[userenv]
+
+[userenv.shared]
+CORS_ORIGINS = "*"
+ENVIRONMENT = "development"
+JWT_SECRET_KEY = "discord-bot-hosting-super-secret-jwt-key-2024-change-in-production"
+LOG_LEVEL = "INFO"
+NEON_DATABASE_URL = "postgresql://neondb_owner:npg_l9fiZenATEu2@ep-bold-sunset-awobgptu.c-12.us-east-1.aws.neon.tech/neondb?sslmode=require"
+R2_ACCESS_KEY_ID = "611193e82765308db8e23319386cdcd5"
+R2_ACCOUNT_ID = "788323f199af7844886c88f5be37d66f"
+R2_BUCKET_NAME = "heave"
+R2_ENDPOINT_URL = "https://788323f199af7844886c88f5be37d66f.r2.cloudflarestorage.com"
+R2_SECRET_ACCESS_KEY = "79d875f8c8275c9651307d7d5b31ef9cbb075548bd6113740c1f00d61e33baad"
+
+[nix]
+channel = "stable-25_05"
+packages = ["cargo", "libiconv", "libxcrypt", "openssl", "pkg-config", "postgresql", "rustc"]

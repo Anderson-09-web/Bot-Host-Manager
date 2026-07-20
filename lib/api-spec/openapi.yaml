@@ -3,13 +3,30 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Discord Bot Hosting Panel API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: auth
+    description: Authentication
+  - name: bot
+    description: Bot management
+  - name: files
+    description: File system operations
+  - name: env-vars
+    description: Environment variables
+  - name: metrics
+    description: System metrics
+  - name: logs
+    description: Bot logs
+  - name: config
+    description: Panel configuration
+  - name: audit
+    description: Audit logs
+
 paths:
   /healthz:
     get:
@@ -24,13 +41,834 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login to the panel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginInput"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthToken"
+        "401":
+          description: Invalid credentials
+
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Logout
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /auth/me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      summary: Get current user profile
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Unauthorized
+
+  /bot/status:
+    get:
+      operationId: getBotStatus
+      tags: [bot]
+      summary: Get bot status
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Bot status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotStatus"
+
+  /bot/start:
+    post:
+      operationId: startBot
+      tags: [bot]
+      summary: Start the Discord bot
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Bot started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotStatus"
+
+  /bot/stop:
+    post:
+      operationId: stopBot
+      tags: [bot]
+      summary: Stop the Discord bot
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Bot stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotStatus"
+
+  /bot/restart:
+    post:
+      operationId: restartBot
+      tags: [bot]
+      summary: Restart the Discord bot
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Bot restarted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotStatus"
+
+  /bot/kill:
+    post:
+      operationId: killBot
+      tags: [bot]
+      summary: Force kill the Discord bot
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Bot killed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotStatus"
+
+  /files:
+    get:
+      operationId: listFiles
+      tags: [files]
+      summary: List files and folders
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: path
+          in: query
+          schema:
+            type: string
+            default: "/"
+      responses:
+        "200":
+          description: File list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileList"
+    delete:
+      operationId: deleteFile
+      tags: [files]
+      summary: Delete a file or folder
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /files/content:
+    get:
+      operationId: getFileContent
+      tags: [files]
+      summary: Get file content for editing
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: File content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileContent"
+    put:
+      operationId: updateFileContent
+      tags: [files]
+      summary: Save file content
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FileContentUpdate"
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /files/create:
+    post:
+      operationId: createFile
+      tags: [files]
+      summary: Create a file or folder
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FileCreate"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileItem"
+
+  /files/rename:
+    post:
+      operationId: renameFile
+      tags: [files]
+      summary: Rename a file or folder
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FileRename"
+      responses:
+        "200":
+          description: Renamed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /files/move:
+    post:
+      operationId: moveFile
+      tags: [files]
+      summary: Move a file or folder
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FileMove"
+      responses:
+        "200":
+          description: Moved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /files/copy:
+    post:
+      operationId: copyFile
+      tags: [files]
+      summary: Copy a file or folder
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FileCopy"
+      responses:
+        "201":
+          description: Copied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /env-vars:
+    get:
+      operationId: listEnvVars
+      tags: [env-vars]
+      summary: List all environment variables
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Environment variables
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/EnvVar"
+    post:
+      operationId: createEnvVar
+      tags: [env-vars]
+      summary: Create an environment variable
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnvVarInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvVar"
+
+  /env-vars/{id}:
+    put:
+      operationId: updateEnvVar
+      tags: [env-vars]
+      summary: Update an environment variable
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnvVarUpdate"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvVar"
+    delete:
+      operationId: deleteEnvVar
+      tags: [env-vars]
+      summary: Delete an environment variable
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /metrics:
+    get:
+      operationId: getMetrics
+      tags: [metrics]
+      summary: Get current system metrics snapshot
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: System metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemMetrics"
+
+  /logs:
+    get:
+      operationId: getLogs
+      tags: [logs]
+      summary: Get bot logs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 200
+        - name: level
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Log entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LogEntry"
+    delete:
+      operationId: clearLogs
+      tags: [logs]
+      summary: Clear all logs
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Cleared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /config:
+    get:
+      operationId: getConfig
+      tags: [config]
+      summary: Get panel configuration
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PanelConfig"
+    put:
+      operationId: updateConfig
+      tags: [config]
+      summary: Update panel configuration
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigUpdate"
+      responses:
+        "200":
+          description: Updated configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PanelConfig"
+
+  /audit:
+    get:
+      operationId: getAuditLogs
+      tags: [audit]
+      summary: Get audit logs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Audit logs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AuditLog"
+
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
   schemas:
     HealthStatus:
       type: object
       properties:
         status:
           type: string
-      required:
-        - status
+      required: [status]
 
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+      required: [success, message]
+
+    LoginInput:
+      type: object
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+      required: [username, password]
+
+    AuthToken:
+      type: object
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+        user:
+          $ref: "#/components/schemas/User"
+      required: [access_token, token_type, user]
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+        email:
+          type: ["string", "null"]
+        is_admin:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+      required: [id, username, is_admin, created_at]
+
+    BotStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [online, offline, starting, restarting, stopping]
+        pid:
+          type: ["integer", "null"]
+        uptime_seconds:
+          type: ["number", "null"]
+        started_at:
+          type: ["string", "null"]
+          format: date-time
+        framework:
+          type: ["string", "null"]
+        main_file:
+          type: ["string", "null"]
+        memory_mb:
+          type: ["number", "null"]
+        cpu_percent:
+          type: ["number", "null"]
+      required: [status]
+
+    FileItem:
+      type: object
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        type:
+          type: string
+          enum: [file, folder]
+        size:
+          type: ["integer", "null"]
+        modified_at:
+          type: ["string", "null"]
+          format: date-time
+        extension:
+          type: ["string", "null"]
+      required: [name, path, type]
+
+    FileList:
+      type: object
+      properties:
+        path:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileItem"
+        total_files:
+          type: integer
+        total_folders:
+          type: integer
+      required: [path, items, total_files, total_folders]
+
+    FileContent:
+      type: object
+      properties:
+        path:
+          type: string
+        content:
+          type: string
+        encoding:
+          type: string
+        size:
+          type: integer
+        modified_at:
+          type: ["string", "null"]
+          format: date-time
+      required: [path, content, encoding, size]
+
+    FileContentUpdate:
+      type: object
+      properties:
+        path:
+          type: string
+        content:
+          type: string
+      required: [path, content]
+
+    FileCreate:
+      type: object
+      properties:
+        path:
+          type: string
+        type:
+          type: string
+          enum: [file, folder]
+        content:
+          type: string
+      required: [path, type]
+
+    FileRename:
+      type: object
+      properties:
+        path:
+          type: string
+        new_name:
+          type: string
+      required: [path, new_name]
+
+    FileMove:
+      type: object
+      properties:
+        source:
+          type: string
+        destination:
+          type: string
+      required: [source, destination]
+
+    FileCopy:
+      type: object
+      properties:
+        source:
+          type: string
+        destination:
+          type: string
+      required: [source, destination]
+
+    EnvVar:
+      type: object
+      properties:
+        id:
+          type: integer
+        key:
+          type: string
+        value:
+          type: string
+        is_secret:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required: [id, key, value, is_secret, created_at, updated_at]
+
+    EnvVarInput:
+      type: object
+      properties:
+        key:
+          type: string
+        value:
+          type: string
+        is_secret:
+          type: boolean
+      required: [key, value]
+
+    EnvVarUpdate:
+      type: object
+      properties:
+        key:
+          type: string
+        value:
+          type: string
+        is_secret:
+          type: boolean
+
+    SystemMetrics:
+      type: object
+      properties:
+        cpu_percent:
+          type: number
+        ram_used_mb:
+          type: number
+        ram_total_mb:
+          type: number
+        ram_percent:
+          type: number
+        disk_used_gb:
+          type: number
+        disk_total_gb:
+          type: number
+        disk_percent:
+          type: number
+        uptime_seconds:
+          type: number
+        python_version:
+          type: string
+        bot_status:
+          type: string
+        bot_pid:
+          type: ["integer", "null"]
+        bot_uptime_seconds:
+          type: ["number", "null"]
+        bot_memory_mb:
+          type: ["number", "null"]
+        bot_cpu_percent:
+          type: ["number", "null"]
+        file_count:
+          type: integer
+        folder_count:
+          type: integer
+        latency_ms:
+          type: ["number", "null"]
+        timestamp:
+          type: string
+          format: date-time
+      required:
+        - cpu_percent
+        - ram_used_mb
+        - ram_total_mb
+        - ram_percent
+        - disk_used_gb
+        - disk_total_gb
+        - disk_percent
+        - uptime_seconds
+        - python_version
+        - bot_status
+        - file_count
+        - folder_count
+        - timestamp
+
+    LogEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+        timestamp:
+          type: string
+          format: date-time
+        level:
+          type: string
+        message:
+          type: string
+        source:
+          type: string
+      required: [id, timestamp, level, message, source]
+
+    PanelConfig:
+      type: object
+      properties:
+        bot_name:
+          type: string
+        main_file:
+          type: string
+        auto_restart:
+          type: boolean
+        auto_install_deps:
+          type: boolean
+        max_log_lines:
+          type: integer
+        python_version:
+          type: string
+      required: [bot_name, main_file, auto_restart, auto_install_deps, max_log_lines, python_version]
+
+    ConfigUpdate:
+      type: object
+      properties:
+        bot_name:
+          type: string
+        main_file:
+          type: string
+        auto_restart:
+          type: boolean
+        auto_install_deps:
+          type: boolean
+        max_log_lines:
+          type: integer
+        python_version:
+          type: string
+
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: integer
+        user_id:
+          type: ["integer", "null"]
+        username:
+          type: ["string", "null"]
+        action:
+          type: string
+        details:
+          type: ["string", "null"]
+        ip_address:
+          type: ["string", "null"]
+        created_at:
+          type: string
+          format: date-time
+      required: [id, action, created_at]
