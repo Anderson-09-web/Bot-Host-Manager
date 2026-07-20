@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Render build script — runs once before the service starts.
-# Installs pnpm, builds the React frontend, then installs Python deps.
+# Installs pnpm locally (no global/system write needed), builds the React
+# frontend, then installs Python deps.
 set -euo pipefail
 
 echo ""
@@ -9,10 +10,10 @@ echo "  Discord Bot Hosting Panel — Render Build"
 echo "══════════════════════════════════════════════════"
 echo ""
 
-# ── 1. Node / pnpm ────────────────────────────────────────────────────────────
-echo "→ Enabling pnpm via corepack..."
-corepack enable
-corepack prepare pnpm@latest --activate
+# ── 1. pnpm (local install — avoids read-only /usr/bin on Render) ─────────────
+echo "→ Installing pnpm locally..."
+npm install --no-save pnpm
+export PATH="$PWD/node_modules/.bin:$PATH"
 
 echo "→ Installing Node dependencies..."
 pnpm install --frozen-lockfile
