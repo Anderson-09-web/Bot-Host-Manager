@@ -10,13 +10,15 @@ echo "  Discord Bot Hosting Panel — Render Build"
 echo "══════════════════════════════════════════════════"
 echo ""
 
-# ── 1. pnpm (local install — avoids read-only /usr/bin on Render) ─────────────
-echo "→ Installing pnpm locally..."
-npm install --no-save pnpm
+# ── 1. pnpm (pinned version, local install) ───────────────────────────────────
+echo "→ Installing pnpm@10.26.1 locally..."
+npm install --no-save pnpm@10.26.1
 export PATH="$PWD/node_modules/.bin:$PATH"
 
 echo "→ Installing Node dependencies..."
-pnpm install --frozen-lockfile
+# --no-frozen-lockfile lets pnpm re-apply pnpm-workspace.yaml settings
+# (onlyBuiltDependencies etc.) without requiring a lockfile settings bump.
+pnpm install --no-frozen-lockfile
 
 # ── 2. React frontend ─────────────────────────────────────────────────────────
 echo "→ Building React frontend..."
