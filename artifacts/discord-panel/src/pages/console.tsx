@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Trash2, Download, Search, Filter } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/lib/auth";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,67 +24,58 @@ interface LogLine {
 export default function Console() {
   useProtectedRoute();
   const { toast } = useToast();
-  
+  const { token } = useAuth();
+
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [search, setSearch] = useState("");
   const [levelFilter, setLevelFilter] = useState<Set<string>>(new Set(["INFO", "WARNING", "ERROR"]));
   const [autoScroll, setAutoScroll] = useState(true);
-  
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
-  const { data: initialLogs } = useGetLogs({ limit: 100 });
+  const { data: initialLogs } = useGetLogs({ limit: 200 });
   const clearLogs = useClearLogs();
 
-  // Load initial logs
+  // Load stored logs on mount
   useEffect(() => {
     if (initialLogs && logs.length === 0) {
-      setLogs(initialLogs.map(l => ({ ...l, id: l.id || crypto.randomUUID() })));
+      setLogs(initialLogs.map((l: any) => ({ ...l, id: l.id ?? crypto.randomUUID() })));
     }
   }, [initialLogs]);
 
-  // Setup WebSocket
+  // WebSocket — pass JWT via query param (browser WS doesn't support headers)
   useEffect(() => {
     let ws: WebSocket;
-    let reconnectTimer: any;
-    
+    let reconnectTimer: ReturnType<typeof setTimeout>;
+
     const connect = () => {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const wsUrl = `${protocol}//${window.location.host}/api/ws/console`;
-      ws = new WebSocket(wsUrl);
+      const t = token ?? localStorage.getItem("access_token") ?? "";
+      ws = new WebSocket(`${protocol}//${window.location.host}/api/ws/console?token=${encodeURIComponent(t)}`);
       wsRef.current = ws;
 
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
           if (data.type === "log") {
-            setLogs(prev => [...prev, {
-              id: crypto.randomUUID(),
-              timestamp: data.timestamp,
-              level: data.level,
-              message: data.message
-            }].slice(-1000)); // Keep last 1000 logs
+            setLogs((prev) => [
+              ...prev,
+              { id: crypto.randomUUID(), timestamp: data.timestamp, level: data.level, message: data.message },
+            ].slice(-1000));
           }
-        } catch (e) {
-          console.error("Failed to parse WS message", e);
-        }
+        } catch {/* ignore malformed */ }
       };
 
-      ws.onclose = () => {
-        reconnectTimer = setTimeout(connect, 3000);
-      };
+      ws.onclose = () => { reconnectTimer = setTimeout(connect, 3000); };
     };
 
     connect();
-
     return () => {
       clearTimeout(reconnectTimer);
-      if (wsRef.current) {
-        wsRef.current.onclose = null;
-        wsRef.current.close();
-      }
+      if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); }
     };
-  }, []);
+  }, [token]);
 
   // Auto-scroll
   useEffect(() => {
@@ -95,22 +87,21 @@ export default function Console() {
   const handleScroll = () => {
     if (!scrollRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
-    const isAtBottom = Math.abs(scrollHeight - clientHeight - scrollTop) < 10;
-    setAutoScroll(isAtBottom);
+    setAutoScroll(Math.abs(scrollHeight - clientHeight - scrollTop) < 10);
   };
 
   const handleClear = () => {
     clearLogs.mutate(undefined, {
       onSuccess: () => setLogs([]),
-      onError: () => toast({ title: "Error", description: "Failed to clear logs", variant: "destructive" })
+      onError: () => toast({ title: "Error", description: "Failed to clear logs", variant: "destructive" }),
     });
   };
 
   const handleDownload = () => {
-    const text = logs.map(l => `[${l.timestamp}] ${l.level}: ${l.message}`).join("\n");
-    const blob = new Blob([text], { type: 'text/plain' });
+    const text = logs.map((l) => `[${l.timestamp}] ${l.level}: ${l.message}`).join("\n");
+    const blob = new Blob([text], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
+    const a = document.createElement("a");
     a.href = url;
     a.download = `console-${new Date().toISOString()}.log`;
     document.body.appendChild(a);
@@ -120,48 +111,46 @@ export default function Console() {
   };
 
   const toggleLevel = (level: string) => {
-    setLevelFilter(prev => {
+    setLevelFilter((prev) => {
       const next = new Set(prev);
-      if (next.has(level)) next.delete(level);
-      else next.add(level);
+      next.has(level) ? next.delete(level) : next.add(level);
       return next;
     });
   };
 
-  const filteredLogs = useMemo(() => {
-    return logs.filter(l => {
-      if (!levelFilter.has(l.level)) return false;
-      if (search && !l.message.toLowerCase().includes(search.toLowerCase())) return false;
-      return true;
-    });
-  }, [logs, search, levelFilter]);
+  const filteredLogs = useMemo(() =>
+    logs.filter((l) => levelFilter.has(l.level) && (!search || l.message.toLowerCase().includes(search.toLowerCase()))),
+    [logs, search, levelFilter],
+  );
 
   return (
     <AppLayout>
       <div className="flex flex-col h-full bg-background">
-        <div className="flex items-center justify-between p-4 border-b border-border bg-card/50 shrink-0">
-          <div className="flex items-center gap-4 flex-1">
-            <h1 className="text-xl font-bold tracking-tight">Console</h1>
-            <div className="relative max-w-sm w-full">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search logs..."
-                className="pl-9 bg-background font-mono text-sm"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-              />
-            </div>
+
+        {/* Toolbar — wraps on mobile */}
+        <div className="flex flex-wrap items-center gap-2 p-3 border-b border-border bg-card/50 shrink-0">
+          <h1 className="text-lg font-bold tracking-tight mr-2">Console</h1>
+
+          {/* Search — grows on larger screens */}
+          <div className="relative flex-1 min-w-[160px]">
+            <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              placeholder="Search logs..."
+              className="pl-8 bg-background font-mono text-sm h-8"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 ml-auto">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="gap-2">
-                  <Filter size={16} /> Levels
+                <Button variant="outline" size="sm" className="gap-1.5 h-8">
+                  <Filter size={14} /> Levels
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-40">
-                {["INFO", "WARNING", "ERROR"].map(level => (
+                {["INFO", "WARNING", "ERROR"].map((level) => (
                   <DropdownMenuCheckboxItem
                     key={level}
                     checked={levelFilter.has(level)}
@@ -173,42 +162,43 @@ export default function Console() {
               </DropdownMenuContent>
             </DropdownMenu>
 
-            <Button variant="outline" size="sm" onClick={handleDownload}>
-              <Download size={16} className="mr-2" /> Export
+            <Button variant="outline" size="sm" onClick={handleDownload} className="h-8">
+              <Download size={14} className="sm:mr-1.5" />
+              <span className="hidden sm:inline">Export</span>
             </Button>
-            
-            <Button variant="destructive" size="sm" onClick={handleClear} disabled={clearLogs.isPending}>
-              <Trash2 size={16} className="mr-2" /> Clear
+
+            <Button variant="destructive" size="sm" onClick={handleClear} disabled={clearLogs.isPending} className="h-8">
+              <Trash2 size={14} className="sm:mr-1.5" />
+              <span className="hidden sm:inline">Clear</span>
             </Button>
           </div>
         </div>
 
-        <div 
+        {/* Log output */}
+        <div
           ref={scrollRef}
           onScroll={handleScroll}
-          className="flex-1 overflow-y-auto p-4 font-mono text-sm bg-[#0a0c10] text-gray-300"
+          className="flex-1 overflow-y-auto p-3 sm:p-4 font-mono text-xs sm:text-sm bg-[#0a0c10] text-gray-300"
         >
           {filteredLogs.length === 0 ? (
             <div className="text-muted-foreground text-center mt-20">No logs to display</div>
           ) : (
-            filteredLogs.map(log => {
+            filteredLogs.map((log) => {
               const date = new Date(log.timestamp);
-              const timeString = isNaN(date.getTime()) ? log.timestamp : date.toLocaleTimeString(undefined, {
-                hour12: false,
-                hour: '2-digit',
-                minute:'2-digit',
-                second:'2-digit',
-              }) + '.' + date.getMilliseconds().toString().padStart(3, '0');
+              const ts = isNaN(date.getTime()) ? log.timestamp
+                : date.toLocaleTimeString(undefined, { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })
+                  + "." + date.getMilliseconds().toString().padStart(3, "0");
 
-              let colorClass = "text-blue-400";
-              if (log.level === "WARNING") colorClass = "text-yellow-400";
-              if (log.level === "ERROR") colorClass = "text-red-400";
+              const colorClass =
+                log.level === "WARNING" ? "text-yellow-400"
+                : log.level === "ERROR"   ? "text-red-400"
+                : "text-blue-400";
 
               return (
-                <div key={log.id} className="flex gap-4 py-0.5 hover:bg-white/5 transition-colors px-2 rounded-sm group">
-                  <span className="text-gray-500 shrink-0 select-none">[{timeString}]</span>
-                  <span className={`shrink-0 w-16 font-semibold select-none ${colorClass}`}>
-                    {log.level.padEnd(7)}
+                <div key={log.id} className="flex gap-2 sm:gap-4 py-0.5 hover:bg-white/5 px-2 rounded-sm group">
+                  <span className="text-gray-500 shrink-0 select-none">[{ts}]</span>
+                  <span className={`shrink-0 w-14 sm:w-16 font-semibold select-none ${colorClass}`}>
+                    {log.level}
                   </span>
                   <span className="break-all whitespace-pre-wrap flex-1">{log.message}</span>
                 </div>
