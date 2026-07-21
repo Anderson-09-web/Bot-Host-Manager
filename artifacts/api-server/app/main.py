@@ -16,6 +16,28 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import settings
 
+
+async def _seed_default_bot_files():
+    """Upload default bot files to R2 on startup.
+
+    config_manager.py  → always overwritten (utility module, keep latest).
+    All other files    → only uploaded when absent (respect user edits).
+    """
+    from app.services.r2_storage import r2_service
+    from app.services.default_bot_files import DEFAULT_FILES
+
+    for r2_key, (content, always_update) in DEFAULT_FILES.items():
+        try:
+            exists = await r2_service.object_exists(r2_key)
+            if exists and not always_update:
+                continue
+            data = content.encode("utf-8")
+            await r2_service.put_object(r2_key, data, content_type="text/plain; charset=utf-8")
+            action = "Updated" if exists else "Seeded"
+            logger.info("%s default bot file: %s", action, r2_key)
+        except Exception as e:
+            logger.warning("Could not seed %s: %s", r2_key, e)
+
 # Configure structured logging before anything else
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
@@ -69,6 +91,12 @@ async def lifespan(app: FastAPI):
     # Register DB log callback with bot manager
     from app.services.bot_manager import bot_manager
     bot_manager.add_log_callback(_store_log_to_db)
+
+    # Seed default bot files to R2 (config_manager.py always, others only if absent)
+    try:
+        await _seed_default_bot_files()
+    except Exception as e:
+        logger.warning("Default bot file seeding failed (non-fatal): %s", e)
 
     logger.info("Panel API ready on port %s.", settings.__dict__.get("PORT", "?"))
     yield
