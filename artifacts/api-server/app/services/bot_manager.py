@@ -114,6 +114,55 @@ class BotManager:
             "cpu_percent": cpu_percent,
         }
 
+    async def sync_files_to_r2(self):
+        """Upload locally created/modified files back to R2 for persistence.
+
+        Called after the bot exits so that any config or data files the bot
+        wrote at runtime survive the next restart or redeploy.  Only files
+        that are newer than the R2 copy (or absent from R2 entirely) are
+        uploaded, keeping the operation cheap.
+        """
+        if not self.work_dir.exists():
+            return
+
+        from app.services.r2_service import r2_service
+
+        await self._broadcast_log("Syncing modified files back to R2...", "INFO")
+        uploaded = 0
+
+        try:
+            # Snapshot current R2 state so we can compare mtimes
+            objects = await r2_service.list_objects(prefix="")
+            r2_mtimes = {
+                obj["Key"]: obj.get("LastModified")
+                for obj in objects
+                if not obj["Key"].endswith("/")
+            }
+
+            for local_file in self.work_dir.rglob("*"):
+                if not local_file.is_file():
+                    continue
+                rel = local_file.relative_to(self.work_dir).as_posix()
+                local_mtime = datetime.fromtimestamp(
+                    local_file.stat().st_mtime, tz=timezone.utc
+                )
+                r2_mtime = r2_mtimes.get(rel)
+
+                # Upload if the file is new or locally newer than R2
+                if r2_mtime is None or local_mtime > r2_mtime:
+                    data = local_file.read_bytes()
+                    ok = await r2_service.put_object(rel, data)
+                    if ok:
+                        uploaded += 1
+                        logger.debug("Uploaded to R2: %s", rel)
+
+            await self._broadcast_log(
+                f"R2 back-sync complete: {uploaded} file(s) uploaded.", "INFO"
+            )
+        except Exception as e:
+            logger.error("Failed to sync files to R2: %s", e)
+            await self._broadcast_log(f"R2 back-sync failed: {e}", "ERROR")
+
     async def sync_files_from_r2(self):
         """Download bot files from R2, preserving locally modified files.
 
@@ -346,9 +395,14 @@ class BotManager:
         returncode = await self.process.wait()
 
         if self.status in (STATUS_STOPPING,):
-            return  # Intentional stop
+            return  # Intentional stop — stop() already handles the R2 back-sync
 
         await self._broadcast_log(f"Bot process exited with code {returncode}.", "WARNING")
+
+        # Persist any runtime-created/modified files back to R2 before the
+        # work dir could be wiped on the next start or redeploy
+        await self.sync_files_to_r2()
+
         self.status = STATUS_OFFLINE
         self.started_at = None
         await self._broadcast_status()
@@ -382,6 +436,9 @@ class BotManager:
             except asyncio.TimeoutError:
                 self.process.kill()
 
+            # Persist any runtime-created/modified files back to R2
+            await self.sync_files_to_r2()
+
             self.status = STATUS_OFFLINE
             self.started_at = None
             self.process = None
@@ -412,6 +469,11 @@ class BotManager:
 
         try:
             self.process.kill()
+            await asyncio.sleep(0.5)  # brief wait for the OS to reclaim the process
+
+            # Persist any runtime-created/modified files back to R2
+            await self.sync_files_to_r2()
+
             self.status = STATUS_OFFLINE
             self.started_at = None
             self.process = None
