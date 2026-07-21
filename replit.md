@@ -86,6 +86,14 @@ lib/api-client-react/          # Generated Orval hooks (do not edit manually)
 - The api-server dev script runs `bash start.sh` which calls `uvicorn` — not Node.js.
 - To regenerate hooks after editing the OpenAPI spec: `pnpm --filter @workspace/api-spec run codegen`.
 
+## Persistence Rules (mandatory)
+
+- **`config_manager` is the only official method for persisting per-guild/per-server bot configurations.**
+- Any cog, command, or system that needs to store settings or setup data per server MUST use `config_manager` (`cfg.get`, `cfg.set`, `cfg.delete`, `cfg.set_server`, `cfg.clear_server`).
+- It is strictly forbidden to use JSON files, in-memory dicts/globals, SQLite, R2 direct writes, or any other storage method for per-guild data.
+- This rule applies to all current and future additions to the project, without exception.
+- `config_manager` persists all data to the PostgreSQL `bot_data` table via `/api/bot-data`. Data survives restarts and Render redeploys automatically.
+
 ## User Preferences
 
 - Stack: Python FastAPI backend, React/Vite frontend, Neon PostgreSQL, Cloudflare R2.
