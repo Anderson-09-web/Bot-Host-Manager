@@ -51,7 +51,7 @@ async def get_db() -> AsyncSession:
 
 async def init_db():
     """Create all tables and seed default data."""
-    from app.models import user, env_var, log_entry, audit_log, bot_config  # noqa: F401
+    from app.models import user, env_var, log_entry, audit_log, bot_config, bot_data  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables created/verified.")

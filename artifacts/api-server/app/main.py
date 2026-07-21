@@ -56,6 +56,7 @@ from app.api.routes.metrics import router as metrics_router
 from app.api.routes.logs import router as logs_router
 from app.api.routes.config import router as config_router
 from app.api.routes.audit import router as audit_router
+from app.api.routes.bot_data import router as bot_data_router
 from app.api.websockets.console import console_websocket_handler
 from app.api.websockets.metrics import metrics_websocket_handler
 
@@ -167,6 +168,7 @@ app.include_router(metrics_router, prefix="/api")
 app.include_router(logs_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
+app.include_router(bot_data_router, prefix="/api")
 
 
 # ── WebSocket endpoints ──────────────────────────────────────────────────────

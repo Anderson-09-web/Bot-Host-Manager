@@ -327,6 +327,19 @@ class BotManager:
             for var in stored_vars:
                 env[var["key"]] = var["value"]
 
+            # Inject panel API URL + bot key so config_manager can persist
+            # guild configs to the database instead of writing local files.
+            import hashlib
+            import hmac as _hmac
+            _bot_key = _hmac.new(
+                settings.JWT_SECRET_KEY.encode(),
+                b"bot-api-v1",
+                hashlib.sha256,
+            ).hexdigest()
+            _port = os.environ.get("PORT", "8080")
+            env["PANEL_API_URL"] = f"http://127.0.0.1:{_port}"
+            env["PANEL_BOT_KEY"] = _bot_key
+
             await self._broadcast_log(
                 f"Starting bot: {actual_file} (framework: {self.framework or 'unknown'})", "INFO"
             )

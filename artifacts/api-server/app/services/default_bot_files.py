@@ -10,8 +10,8 @@ Only uploaded if the file does NOT already exist in R2.
 CONFIG_MANAGER_PY = '''\
 """
 Persistent per-server configuration manager.
-Saves everything to a single server_configs.json, synced to Cloudflare R2.
-Configurations survive bot restarts, file edits, and updates.
+Stores all settings in the panel\'s PostgreSQL database via its internal API.
+Configurations survive bot restarts and Render redeploys — no files, no R2 uploads.
 
 Usage
 -----
@@ -20,7 +20,7 @@ Usage
     # Read a value (returns None if not set)
     channel_id = cfg.get(guild.id, "welcome_channel")
 
-    # Save a value (auto-syncs to R2)
+    # Save a value (persisted to the database immediately)
     cfg.set(guild.id, "welcome_channel", channel.id)
     cfg.set(guild.id, "welcome_message", "Welcome {mention} to {server}!")
 
@@ -35,29 +35,17 @@ Usage
 
     # Remove all settings for a server
     cfg.clear_server(guild.id)
-
-JSON structure of server_configs.json
---------------------------------------
-{
-  "123456789": {            <- guild_id (always stored as string)
-    "welcome_channel": 987654321,
-    "welcome_message": "Welcome {mention}!",
-    "goodbye_channel": 111222333,
-    "log_channel": 444555666,
-    ...
-  },
-  "999888777": { ... }
-}
 """
 
 import json
 import os
 import threading
-import boto3
-from pathlib import Path
+import urllib.request
+import urllib.error
 
-# ── File path ─────────────────────────────────────────────────────────────────
-_CONFIG_FILE = Path(__file__).parent / "server_configs.json"
+# ── Panel API config (injected by the bot manager at startup) ─────────────────
+_API_URL = os.getenv("PANEL_API_URL", "").rstrip("/")
+_BOT_KEY = os.getenv("PANEL_BOT_KEY", "")
 
 # ── In-memory cache + thread lock ─────────────────────────────────────────────
 _lock = threading.Lock()
@@ -67,69 +55,50 @@ _loaded = False
 
 # ── Internal ──────────────────────────────────────────────────────────────────
 
-def _load_from_disk() -> dict:
-    """Read the JSON config from disk. Returns {} on any error."""
-    if _CONFIG_FILE.exists():
-        try:
-            return json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
-        except Exception as e:
-            print(f"[config_manager] Warning: could not parse config file: {e}", flush=True)
-    return {}
+def _api_available() -> bool:
+    return bool(_API_URL and _BOT_KEY)
+
+
+def _request(method: str, path: str, body=None):
+    """Make a synchronous HTTP request to the panel API.
+
+    Returns the parsed JSON response, or None on any error.
+    Errors are logged but never raised — the bot keeps running.
+    """
+    if not _api_available():
+        return None
+    url = f"{_API_URL}/api/bot-data{path}"
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    headers = {
+        "Authorization": f"Bearer {_BOT_KEY}",
+        "Content-Type": "application/json",
+    }
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        print(f"[config_manager] API error {e.code} on {method} {path}: {e.reason}", flush=True)
+        return None
+    except Exception as e:
+        print(f"[config_manager] API unreachable ({method} {path}): {e}", flush=True)
+        return None
 
 
 def _ensure_loaded():
-    """Lazy-load from disk on first access."""
+    """Lazy-load all guild configs from the database on first access."""
     global _data, _loaded
-    if not _loaded:
-        _data = _load_from_disk()
-        _loaded = True
-        total = len(_data)
-        print(f"[config_manager] Loaded config for {total} server(s).", flush=True)
-
-
-def _save():
-    """Write to disk, then upload to R2."""
-    text = json.dumps(_data, indent=2, ensure_ascii=False)
-    try:
-        _CONFIG_FILE.write_text(text, encoding="utf-8")
-    except Exception as e:
-        print(f"[config_manager] Warning: disk write failed: {e}", flush=True)
-    _upload_to_r2(text.encode("utf-8"))
-
-
-def _upload_to_r2(data: bytes):
-    """
-    Upload server_configs.json to R2 so it persists across restarts.
-    Credentials come from the env vars injected by the hosting panel.
-    Failures are logged but never raised.
-    """
-    endpoint = os.getenv("R2_ENDPOINT_URL")
-    key_id   = os.getenv("R2_ACCESS_KEY_ID")
-    secret   = os.getenv("R2_SECRET_ACCESS_KEY")
-    bucket   = os.getenv("R2_BUCKET_NAME")
-
-    if not all([endpoint, key_id, secret, bucket]):
-        return  # Running locally without R2 — skip silently
-
-    try:
-        client = boto3.client(
-            "s3",
-            endpoint_url=endpoint,
-            aws_access_key_id=key_id,
-            aws_secret_access_key=secret,
-            region_name="auto",
-        )
-        client.put_object(
-            Bucket=bucket,
-            Key="server_configs.json",
-            Body=data,
-            ContentType="application/json",
-        )
-    except Exception as e:
-        print(
-            f"[config_manager] Warning: R2 sync failed (config IS saved locally): {e}",
-            flush=True,
-        )
+    if _loaded:
+        return
+    result = _request("GET", "")
+    if result is not None:
+        _data = result
+        print(f"[config_manager] Loaded config for {len(_data)} server(s) from database.", flush=True)
+    else:
+        print("[config_manager] Warning: panel API unreachable — running in-memory only.", flush=True)
+    _loaded = True
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -143,8 +112,6 @@ def get(guild_id, key: str, default=None):
     guild_id : int | str  — Discord guild ID
     key      : str        — setting name (e.g. "welcome_channel")
     default              — value returned when the key is not set
-
-    Returns the stored value, or `default` if not found.
     """
     with _lock:
         _ensure_loaded()
@@ -153,7 +120,7 @@ def get(guild_id, key: str, default=None):
 
 def set(guild_id, key: str, value):
     """
-    Save a single setting for a server. Persists to disk + R2 immediately.
+    Save a single setting for a server. Persisted to the database immediately.
 
     Parameters
     ----------
@@ -167,7 +134,7 @@ def set(guild_id, key: str, value):
         if gid not in _data:
             _data[gid] = {}
         _data[gid][key] = value
-        _save()
+        _request("PUT", f"/{gid}/{key}", {"value": value})
 
 
 def delete(guild_id, key: str):
@@ -177,7 +144,7 @@ def delete(guild_id, key: str):
         gid = str(guild_id)
         if gid in _data and key in _data[gid]:
             del _data[gid][key]
-            _save()
+            _request("DELETE", f"/{gid}/{key}")
 
 
 def get_server(guild_id) -> dict:
@@ -191,11 +158,15 @@ def get_server(guild_id) -> dict:
 
 
 def set_server(guild_id, config: dict):
-    """Replace ALL settings for a server at once. Persists immediately."""
+    """Replace ALL settings for a server at once. Persisted immediately."""
     with _lock:
         _ensure_loaded()
-        _data[str(guild_id)] = dict(config)
-        _save()
+        gid = str(guild_id)
+        _data[gid] = dict(config)
+        # Clear existing rows for this guild, then upsert all new keys
+        _request("DELETE", f"/{gid}")
+        for k, v in _data[gid].items():
+            _request("PUT", f"/{gid}/{k}", {"value": v})
 
 
 def clear_server(guild_id):
@@ -205,7 +176,7 @@ def clear_server(guild_id):
         gid = str(guild_id)
         if gid in _data:
             del _data[gid]
-            _save()
+            _request("DELETE", f"/{gid}")
 
 
 def all_servers() -> dict:
