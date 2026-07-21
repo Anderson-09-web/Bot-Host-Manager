@@ -17,6 +17,71 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.core.config import settings
 
 
+async def _migrate_server_configs_from_r2():
+    """One-time migration: import server_configs.json from R2 into the bot_data table.
+
+    The old config_manager stored all guild settings in a single JSON file in R2.
+    The new system uses the bot_data PostgreSQL table.  This function runs on every
+    panel start but only does real work once — it skips if the table already has
+    rows OR if the JSON file does not exist in R2.
+    """
+    import json
+    from sqlalchemy import select, func
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from app.core.database import AsyncSessionLocal
+    from app.models.bot_data import BotData
+    from app.services.r2_storage import r2_service
+    from datetime import datetime, timezone
+
+    # Skip if the table already has data (migration already done)
+    async with AsyncSessionLocal() as session:
+        count = await session.scalar(select(func.count()).select_from(BotData))
+        if count and count > 0:
+            logger.debug("bot_data table has %d row(s) — skipping legacy migration.", count)
+            return
+
+    # Try to read server_configs.json from R2
+    raw = await r2_service.get_object("server_configs.json")
+    if raw is None:
+        logger.debug("No server_configs.json in R2 — nothing to migrate.")
+        return
+
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception as e:
+        logger.warning("Could not parse server_configs.json: %s — skipping migration.", e)
+        return
+
+    if not isinstance(data, dict) or not data:
+        logger.debug("server_configs.json is empty — nothing to migrate.")
+        return
+
+    # Insert every guild/key/value into bot_data
+    now = datetime.now(timezone.utc)
+    rows = []
+    for guild_id, settings_dict in data.items():
+        if not isinstance(settings_dict, dict):
+            continue
+        for key, value in settings_dict.items():
+            rows.append({"guild_id": str(guild_id), "key": key, "value": value, "updated_at": now})
+
+    if not rows:
+        return
+
+    async with AsyncSessionLocal() as session:
+        stmt = (
+            pg_insert(BotData)
+            .values(rows)
+            .on_conflict_do_nothing(constraint="uq_bot_data_guild_key")
+        )
+        await session.execute(stmt)
+        await session.commit()
+
+    logger.info(
+        "Migrated %d setting(s) from server_configs.json into bot_data table.", len(rows)
+    )
+
+
 async def _seed_default_bot_files():
     """Upload default bot files to R2 on startup.
 
@@ -92,6 +157,12 @@ async def lifespan(app: FastAPI):
     # Register DB log callback with bot manager
     from app.services.bot_manager import bot_manager
     bot_manager.add_log_callback(_store_log_to_db)
+
+    # Migrate legacy server_configs.json from R2 → bot_data table (runs once)
+    try:
+        await _migrate_server_configs_from_r2()
+    except Exception as e:
+        logger.warning("Legacy config migration failed (non-fatal): %s", e)
 
     # Seed default bot files to R2 (config_manager.py always, others only if absent)
     try:
