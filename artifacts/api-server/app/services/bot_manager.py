@@ -48,6 +48,10 @@ class BotManager:
         self._stdout_task: Optional[asyncio.Task] = None
         self._stderr_task: Optional[asyncio.Task] = None
         self._auto_restart_task: Optional[asyncio.Task] = None
+        # R2 keys present at the last sync_files_from_r2() call.
+        # Used by sync_files_to_r2() to distinguish "bot created new file"
+        # from "user deleted file via panel" — both have r2_mtime=None otherwise.
+        self._r2_keys_at_last_sync: set = set()
 
     def add_log_callback(self, callback: Callable):
         """Register a callback to receive log lines (stored to DB)."""
@@ -115,12 +119,18 @@ class BotManager:
         }
 
     async def sync_files_to_r2(self):
-        """Upload locally created/modified files back to R2 for persistence.
+        """Upload runtime-modified/created files back to R2 for persistence.
 
-        Called after the bot exits so that any config or data files the bot
-        wrote at runtime survive the next restart or redeploy.  Only files
-        that are newer than the R2 copy (or absent from R2 entirely) are
-        uploaded, keeping the operation cheap.
+        Called after the bot exits.  Uses three rules to decide per file:
+
+        1. File is in R2 now and local copy is newer → bot modified it → upload.
+        2. File is NOT in R2 now and was NOT in R2 at last sync → bot created it
+           (e.g. a data/config file) → upload.
+        3. File is NOT in R2 now but WAS in R2 at last sync → user deleted it
+           via the panel while the bot was running → skip (never re-upload).
+
+        Rule 3 is what prevents deleted cogs from reappearing and prevents
+        panel edits from being overwritten by stale local copies.
         """
         if not self.work_dir.exists():
             return
@@ -129,9 +139,10 @@ class BotManager:
 
         await self._broadcast_log("Syncing modified files back to R2...", "INFO")
         uploaded = 0
+        skipped_deleted = 0
 
         try:
-            # Snapshot current R2 state so we can compare mtimes
+            # Current R2 state
             objects = await r2_service.list_objects(prefix="")
             r2_mtimes = {
                 obj["Key"]: obj.get("LastModified")
@@ -148,16 +159,31 @@ class BotManager:
                 )
                 r2_mtime = r2_mtimes.get(rel)
 
-                # Upload if the file is new or locally newer than R2
-                if r2_mtime is None or local_mtime > r2_mtime:
-                    data = local_file.read_bytes()
-                    ok = await r2_service.put_object(rel, data)
-                    if ok:
-                        uploaded += 1
-                        logger.debug("Uploaded to R2: %s", rel)
+                if r2_mtime is None:
+                    # File is not in R2 right now.
+                    if rel in self._r2_keys_at_last_sync:
+                        # Was in R2 at sync time → user deleted it via panel → skip.
+                        logger.debug("Skipping re-upload of panel-deleted file: %s", rel)
+                        skipped_deleted += 1
+                        continue
+                    # Was never in R2 → bot created it at runtime → upload.
+                else:
+                    # File exists in R2. Only upload if local is strictly newer
+                    # (bot modified it). If R2 is same age or newer, the user
+                    # edited it via the panel editor — keep R2 version.
+                    if local_mtime <= r2_mtime:
+                        continue
+
+                data = local_file.read_bytes()
+                ok = await r2_service.put_object(rel, data)
+                if ok:
+                    uploaded += 1
+                    logger.debug("Uploaded to R2: %s", rel)
 
             await self._broadcast_log(
-                f"R2 back-sync complete: {uploaded} file(s) uploaded.", "INFO"
+                f"R2 back-sync complete: {uploaded} uploaded, "
+                f"{skipped_deleted} panel-deleted file(s) left removed.",
+                "INFO",
             )
         except Exception as e:
             logger.error("Failed to sync files to R2: %s", e)
@@ -184,6 +210,9 @@ class BotManager:
 
             # Build set of R2 keys (files only, no folder markers)
             r2_keys = {obj["Key"] for obj in objects if not obj["Key"].endswith("/")}
+            # Snapshot for sync_files_to_r2() so it can tell "bot created file"
+            # apart from "user deleted file via panel" (both would have r2_mtime=None).
+            self._r2_keys_at_last_sync = set(r2_keys)
 
             for obj in objects:
                 key = obj["Key"]
