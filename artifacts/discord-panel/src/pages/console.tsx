@@ -129,7 +129,7 @@ export default function Console() {
 
   return (
     <AppLayout>
-      <div className="flex flex-col h-full bg-background">
+      <div className="flex-1 flex flex-col min-h-0 bg-background">
 
         {/* Toolbar — wraps on mobile */}
         <div className="flex flex-wrap items-center gap-2 p-3 border-b border-border bg-card/50 shrink-0">

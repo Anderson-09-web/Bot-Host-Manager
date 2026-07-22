@@ -174,15 +174,24 @@ export default function Files() {
     } else if (dialogState.type === "copy") {
       copyFile.mutate({ data: { source: dialogState.path, destination: dialogInput } }, { onSuccess: () => { refetch(); closeDialog(); } });
     } else if (dialogState.type === "delete") {
-      deleteFile.mutate({ params: { path: dialogState.path } }, {
+      const pathToDelete = dialogState.path;
+      deleteFile.mutate({ params: { path: pathToDelete } }, {
         onSuccess: () => {
-          if (selectedFile === dialogState.path) {
+          if (selectedFile === pathToDelete) {
             setSelectedFile(null);
             // Reset so the same path can be re-opened cleanly later
             initializedRef.current = null;
             setEditorContent("");
           }
           refetch();
+          closeDialog();
+        },
+        onError: (e: any) => {
+          toast({
+            title: "Delete Failed",
+            description: e?.message ?? "Could not delete the file. Please try again.",
+            variant: "destructive",
+          });
           closeDialog();
         },
       });
@@ -403,9 +412,13 @@ export default function Files() {
           )}
 
           <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={closeDialog}>Cancel</Button>
-            <Button variant={dialogState.type === "delete" ? "destructive" : "default"} onClick={submitDialog}>
-              {dialogState.type === "delete" ? "Delete" : "Confirm"}
+            <Button variant="outline" onClick={closeDialog} disabled={deleteFile.isPending}>Cancel</Button>
+            <Button
+              variant={dialogState.type === "delete" ? "destructive" : "default"}
+              onClick={submitDialog}
+              disabled={deleteFile.isPending}
+            >
+              {dialogState.type === "delete" && deleteFile.isPending ? "Deleting…" : dialogState.type === "delete" ? "Delete" : "Confirm"}
             </Button>
           </DialogFooter>
         </DialogContent>
