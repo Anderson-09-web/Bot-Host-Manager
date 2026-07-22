@@ -62,7 +62,11 @@ export default function Console() {
             setLogs((prev) => [
               ...prev,
               { id: crypto.randomUUID(), timestamp: data.timestamp, level: data.level, message: data.message },
-            ].slice(-1000));
+            ].slice(-2000));
+          } else if (data.type === "clear_logs") {
+            // Bot started fresh — wipe the local buffer so stale logs
+            // from deleted cogs or previous sessions disappear immediately.
+            setLogs([]);
           }
         } catch {/* ignore malformed */ }
       };

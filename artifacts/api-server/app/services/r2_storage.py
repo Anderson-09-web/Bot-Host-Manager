@@ -179,16 +179,14 @@ class R2StorageService:
             return False
 
     async def object_exists(self, key: str) -> bool:
-        """Check if an object exists in R2."""
-        def _head():
-            client = self._client()
-            client.head_object(Bucket=self.bucket, Key=key)
+        """Check if an object exists in R2 using listing (more reliable than HEAD).
 
-        try:
-            await _run_in_executor(_head)
-            return True
-        except ClientError:
-            return False
+        HEAD can fail silently on some R2 configurations (permission quirks,
+        eventual consistency). Listing an exact prefix is consistent with how
+        we already verify all other file operations.
+        """
+        objects = await self.list_objects(prefix=key)
+        return any(o["Key"] == key for o in objects)
 
     async def get_object_metadata(self, key: str) -> Optional[dict]:
         """Get object metadata (size, last modified)."""

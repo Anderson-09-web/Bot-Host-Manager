@@ -13,9 +13,13 @@ Persistent per-server configuration manager.
 Stores all settings in the panel\'s PostgreSQL database via its internal API.
 Configurations survive bot restarts and Render redeploys — no files, no R2 uploads.
 
-Usage
------
-    import config_manager as cfg
+Each cog should create its own namespaced instance so configs from different
+cogs are stored separately and cleaned up independently when a cog is deleted.
+
+Recommended usage (one line at the top of your cog file)
+---------------------------------------------------------
+    from config_manager import ConfigManager
+    cfg = ConfigManager(__name__)   # __name__ = e.g. "cogs.welcome" → namespace "welcome"
 
     # Read a value (returns None if not set)
     channel_id = cfg.get(guild.id, "welcome_channel")
@@ -27,14 +31,19 @@ Usage
     # Delete a single key
     cfg.delete(guild.id, "welcome_channel")
 
-    # Get all settings for a server
-    server_settings = cfg.get_server(guild.id)   # returns a dict copy
+    # Get all settings stored by this cog for a server
+    server_cfg = cfg.get_server(guild.id)   # returns a dict copy
 
-    # Replace all settings for a server at once
-    cfg.set_server(guild.id, {"welcome_channel": 123, "prefix": "!"})
+    # Replace all this cog\'s settings for a server at once
+    cfg.set_server(guild.id, {"welcome_channel": 123})
 
-    # Remove all settings for a server
+    # Remove all this cog\'s settings for a server
     cfg.clear_server(guild.id)
+
+Legacy module-level API (still supported, uses "_global" namespace)
+--------------------------------------------------------------------
+    import config_manager as cfg
+    cfg.get(guild.id, "key")    # works but shares one namespace with everything
 """
 
 import json
@@ -47,10 +56,10 @@ import urllib.error
 _API_URL = os.getenv("PANEL_API_URL", "").rstrip("/")
 _BOT_KEY = os.getenv("PANEL_BOT_KEY", "")
 
-# ── In-memory cache + thread lock ─────────────────────────────────────────────
-_lock = threading.Lock()
-_data: dict = {}
-_loaded = False
+# ── Module-level cache (used by legacy functions) ─────────────────────────────
+_lock   = threading.Lock()
+_cache: dict = {}      # {guild_id: {full_key: value}}  — raw DB keys with namespace
+_loaded = False        # True once GET "" has been fetched
 
 
 # ── Internal ──────────────────────────────────────────────────────────────────
@@ -88,102 +97,164 @@ def _request(method: str, path: str, body=None):
 
 
 def _ensure_loaded():
-    """Lazy-load all guild configs from the database on first access."""
-    global _data, _loaded
+    """Lazy-load the full guild config from the database on first access."""
+    global _cache, _loaded
     if _loaded:
         return
     result = _request("GET", "")
     if result is not None:
-        _data = result
-        print(f"[config_manager] Loaded config for {len(_data)} server(s) from database.", flush=True)
+        _cache = result
+        print(f"[config_manager] Loaded config for {len(_cache)} server(s) from database.", flush=True)
     else:
         print("[config_manager] Warning: panel API unreachable — running in-memory only.", flush=True)
     _loaded = True
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+# ── ConfigManager class (namespaced — recommended) ────────────────────────────
 
-def get(guild_id, key: str, default=None):
+class ConfigManager:
     """
-    Get a single setting for a server.
+    Per-cog namespaced config manager.
+
+    All keys are stored in the DB as ``{namespace}/{key}`` so configs from
+    different cogs are isolated.  When the cog file is deleted via the panel,
+    all entries for its namespace are automatically purged from the database.
 
     Parameters
     ----------
-    guild_id : int | str  — Discord guild ID
-    key      : str        — setting name (e.g. "welcome_channel")
-    default              — value returned when the key is not set
+    module_name : str
+        Pass ``__name__`` from your cog file.
+        ``"cogs.welcome"`` → namespace ``"welcome"``
+        ``"welcome"``      → namespace ``"welcome"``
     """
-    with _lock:
-        _ensure_loaded()
-        return _data.get(str(guild_id), {}).get(key, default)
+
+    def __init__(self, module_name: str):
+        # Use only the last segment (e.g. "cogs.welcome" → "welcome")
+        self._ns = module_name.split(".")[-1]
+
+    def _full_key(self, key: str) -> str:
+        return f"{self._ns}/{key}"
+
+    def _strip_ns(self, full_key: str) -> str | None:
+        prefix = f"{self._ns}/"
+        if full_key.startswith(prefix):
+            return full_key[len(prefix):]
+        return None
+
+    # ── Read ──────────────────────────────────────────────────────────────────
+
+    def get(self, guild_id, key: str, default=None):
+        """Get a single setting. Returns *default* when not set."""
+        with _lock:
+            _ensure_loaded()
+            return _cache.get(str(guild_id), {}).get(self._full_key(key), default)
+
+    def get_server(self, guild_id) -> dict:
+        """Return all settings stored by this cog for a server (plain dict copy).
+
+        Keys are returned WITHOUT the cog namespace prefix.
+        """
+        with _lock:
+            _ensure_loaded()
+            raw = _cache.get(str(guild_id), {})
+            return {
+                self._strip_ns(k): v
+                for k, v in raw.items()
+                if self._strip_ns(k) is not None
+            }
+
+    # ── Write ─────────────────────────────────────────────────────────────────
+
+    def set(self, guild_id, key: str, value):
+        """Save a single setting. Persisted to the database immediately."""
+        with _lock:
+            _ensure_loaded()
+            gid = str(guild_id)
+            fk  = self._full_key(key)
+            _cache.setdefault(gid, {})[fk] = value
+            _request("PUT", f"/{gid}/{fk}", {"value": value})
+
+    def set_server(self, guild_id, config: dict):
+        """Replace ALL of this cog\'s settings for a server at once."""
+        with _lock:
+            _ensure_loaded()
+            gid = str(guild_id)
+            _cache.setdefault(gid, {})
+            # Remove old keys for this namespace in cache
+            for k in list(_cache[gid]):
+                if self._strip_ns(k) is not None:
+                    del _cache[gid][k]
+            # Clear in DB (module-scoped) then upsert new values
+            _request("DELETE", f"/{gid}?module={self._ns}")
+            for k, v in config.items():
+                fk = self._full_key(k)
+                _cache[gid][fk] = v
+                _request("PUT", f"/{gid}/{fk}", {"value": v})
+
+    # ── Delete ────────────────────────────────────────────────────────────────
+
+    def delete(self, guild_id, key: str):
+        """Remove a single setting key for a server."""
+        with _lock:
+            _ensure_loaded()
+            gid = str(guild_id)
+            fk  = self._full_key(key)
+            _cache.get(gid, {}).pop(fk, None)
+            _request("DELETE", f"/{gid}/{fk}")
+
+    def clear_server(self, guild_id):
+        """Delete ALL of this cog\'s settings for a server."""
+        with _lock:
+            _ensure_loaded()
+            gid = str(guild_id)
+            if gid in _cache:
+                for k in list(_cache[gid]):
+                    if self._strip_ns(k) is not None:
+                        del _cache[gid][k]
+            _request("DELETE", f"/{gid}?module={self._ns}")
+
+
+# ── Legacy module-level functions (namespace = "_global") ─────────────────────
+# These still work unchanged for older cogs.  New cogs should use ConfigManager.
+
+_LEGACY = ConfigManager("_global")
+
+
+def get(guild_id, key: str, default=None):
+    """Legacy: get a setting from the shared ``_global`` namespace."""
+    return _LEGACY.get(guild_id, key, default)
 
 
 def set(guild_id, key: str, value):
-    """
-    Save a single setting for a server. Persisted to the database immediately.
-
-    Parameters
-    ----------
-    guild_id : int | str       — Discord guild ID
-    key      : str             — setting name
-    value    : any JSON type   — str, int, bool, list, dict, or None
-    """
-    with _lock:
-        _ensure_loaded()
-        gid = str(guild_id)
-        if gid not in _data:
-            _data[gid] = {}
-        _data[gid][key] = value
-        _request("PUT", f"/{gid}/{key}", {"value": value})
+    """Legacy: save a setting into the shared ``_global`` namespace."""
+    _LEGACY.set(guild_id, key, value)
 
 
 def delete(guild_id, key: str):
-    """Remove a single setting key for a server."""
-    with _lock:
-        _ensure_loaded()
-        gid = str(guild_id)
-        if gid in _data and key in _data[gid]:
-            del _data[gid][key]
-            _request("DELETE", f"/{gid}/{key}")
+    """Legacy: remove a setting from the shared ``_global`` namespace."""
+    _LEGACY.delete(guild_id, key)
 
 
 def get_server(guild_id) -> dict:
-    """
-    Return all settings for a server as a plain dict copy.
-    Modifying the returned dict does NOT save anything.
-    """
-    with _lock:
-        _ensure_loaded()
-        return dict(_data.get(str(guild_id), {}))
+    """Legacy: return all ``_global`` namespace settings for a server."""
+    return _LEGACY.get_server(guild_id)
 
 
 def set_server(guild_id, config: dict):
-    """Replace ALL settings for a server at once. Persisted immediately."""
-    with _lock:
-        _ensure_loaded()
-        gid = str(guild_id)
-        _data[gid] = dict(config)
-        # Clear existing rows for this guild, then upsert all new keys
-        _request("DELETE", f"/{gid}")
-        for k, v in _data[gid].items():
-            _request("PUT", f"/{gid}/{k}", {"value": v})
+    """Legacy: replace all ``_global`` namespace settings for a server."""
+    _LEGACY.set_server(guild_id, config)
 
 
 def clear_server(guild_id):
-    """Delete ALL settings for a server."""
-    with _lock:
-        _ensure_loaded()
-        gid = str(guild_id)
-        if gid in _data:
-            del _data[gid]
-            _request("DELETE", f"/{gid}")
+    """Legacy: delete all ``_global`` namespace settings for a server."""
+    _LEGACY.clear_server(guild_id)
 
 
 def all_servers() -> dict:
-    """Return a copy of the full config dict keyed by guild_id string."""
+    """Return a copy of the full raw cache keyed by guild_id string."""
     with _lock:
         _ensure_loaded()
-        return dict(_data)
+        return dict(_cache)
 '''
 
 # ── main.py ───────────────────────────────────────────────────────────────────
@@ -303,7 +374,9 @@ Message placeholders
 """
 import discord
 from discord.ext import commands
-import config_manager as cfg
+from config_manager import ConfigManager
+
+cfg = ConfigManager(__name__)   # namespace = "welcome" — isolated from other cogs
 
 DEFAULT_WELCOME = "\\U0001f44b Welcome to **{server}**, {mention}! You are member **#{count}**."
 DEFAULT_GOODBYE = "\\U0001f44b **{user}** has left **{server}**. We now have **{count}** members."

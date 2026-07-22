@@ -65,6 +65,23 @@ class BotManager:
         """Unregister a WebSocket console callback."""
         self._console_callbacks = [c for c in self._console_callbacks if c != callback]
 
+    async def _clear_db_logs(self):
+        """Delete all stored log entries from the database.
+
+        Called at bot start so the console only shows logs from the current
+        session — not accumulated output from deleted cogs or old runs.
+        """
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.models.log_entry import LogEntry
+            from sqlalchemy import delete as sql_delete
+            async with AsyncSessionLocal() as session:
+                await session.execute(sql_delete(LogEntry))
+                await session.commit()
+            logger.debug("Cleared DB logs before bot start")
+        except Exception as e:
+            logger.warning("Could not clear DB logs: %s", e)
+
     async def _broadcast_log(self, message: str, level: str = "INFO"):
         """Send a log line to all registered callbacks."""
         for cb in self._log_callbacks:
@@ -76,6 +93,18 @@ class BotManager:
             try:
                 await cb({"type": "log", "level": level, "message": message,
                           "timestamp": datetime.now(timezone.utc).isoformat()})
+            except Exception:
+                pass
+
+    async def _broadcast_clear_logs(self):
+        """Tell WebSocket clients to wipe their local log buffer.
+
+        Sent after clearing DB logs so the console doesn't keep showing
+        stale entries from previous bot sessions or deleted cogs.
+        """
+        for cb in self._console_callbacks:
+            try:
+                await cb({"type": "clear_logs"})
             except Exception:
                 pass
 
@@ -329,6 +358,11 @@ class BotManager:
         await self._broadcast_status()
 
         try:
+            # Clear accumulated logs from previous sessions so the console
+            # only shows logs from this run, not from deleted/old cogs.
+            await self._clear_db_logs()
+            await self._broadcast_clear_logs()
+
             # Sync files from R2
             await self.sync_files_from_r2()
 

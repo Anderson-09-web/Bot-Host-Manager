@@ -116,12 +116,44 @@ async def delete_key(
 @router.delete("/{guild_id}")
 async def clear_guild(
     guild_id: str,
+    module: str | None = None,
     _: bool = Depends(verify_bot_key),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete ALL settings for a guild."""
+    """Delete settings for a guild.
+
+    If *module* query-param is supplied, only keys that start with
+    ``{module}/`` are removed (scoped cog cleanup).  Otherwise ALL
+    keys for the guild are deleted.
+    """
+    if module:
+        prefix = f"{module}/"
+        stmt = delete(BotData).where(
+            BotData.guild_id == guild_id,
+            BotData.key.like(f"{prefix}%"),
+        )
+    else:
+        stmt = delete(BotData).where(BotData.guild_id == guild_id)
+    result = await db.execute(stmt)
+    await db.commit()
+    return {"deleted": True, "guild_id": guild_id, "module": module, "rows": result.rowcount}
+
+
+@router.delete("/module/{module_name}")
+async def clear_module(
+    module_name: str,
+    _: bool = Depends(verify_bot_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete ALL bot_data entries across ALL guilds whose key starts with
+    ``{module_name}/``.
+
+    Called internally when a cog .py file is deleted so that stale configs
+    don't bleed into a newly-uploaded cog with the same name.
+    """
+    prefix = f"{module_name}/"
     result = await db.execute(
-        delete(BotData).where(BotData.guild_id == guild_id)
+        delete(BotData).where(BotData.key.like(f"{prefix}%"))
     )
     await db.commit()
-    return {"deleted": True, "guild_id": guild_id, "rows": result.rowcount}
+    return {"deleted": True, "module": module_name, "rows": result.rowcount}

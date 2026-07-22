@@ -214,15 +214,22 @@ async def delete_file(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a file or folder (and all its contents) from R2."""
+    """Delete a file or folder (and all its contents) from R2.
+
+    When a Python cog file (``cogs/*.py``) is deleted, all bot_data
+    entries stored under that cog's namespace are also purged so that
+    a new cog with the same name starts with a clean slate.
+    """
     if not path:
         raise HTTPException(status_code=400, detail="Path is required")
 
     key = _normalize(path)
-    # Try as file first
+    # Try as exact file first
     if await r2_service.object_exists(key):
         await r2_service.delete_object(key)
         await _audit(db, user_id, "file_delete", f"Deleted file: {path}")
+        # Purge bot_data for this cog module (only for cogs/*.py)
+        await _purge_cog_bot_data(db, key)
     else:
         # Try as folder prefix
         prefix = key.rstrip("/") + "/"
@@ -232,6 +239,26 @@ async def delete_file(
         await _audit(db, user_id, "folder_delete", f"Deleted folder: {path} ({deleted} objects)")
 
     return {"success": True, "message": f"Deleted: {path}"}
+
+
+async def _purge_cog_bot_data(db: AsyncSession, r2_key: str):
+    """If *r2_key* looks like ``cogs/<name>.py``, delete all bot_data rows
+    whose key starts with ``<name>/`` so stale config is gone immediately."""
+    from pathlib import PurePosixPath
+    from sqlalchemy import delete as sql_delete
+    from app.models.bot_data import BotData
+
+    p = PurePosixPath(r2_key)
+    # Only act on cog Python files (cogs/<something>.py)
+    if p.parent.name == "cogs" and p.suffix == ".py":
+        module_name = p.stem
+        prefix = f"{module_name}/"
+        result = await db.execute(
+            sql_delete(BotData).where(BotData.key.like(f"{prefix}%"))
+        )
+        await db.commit()
+        if result.rowcount:
+            logger.info("Purged %d bot_data row(s) for deleted cog '%s'", result.rowcount, module_name)
 
 
 @router.post("/rename")
