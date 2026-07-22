@@ -49,6 +49,7 @@ Legacy module-level API (still supported, uses "_global" namespace)
 import json
 import os
 import threading
+import time
 import urllib.request
 import urllib.error
 
@@ -96,6 +97,32 @@ def _request(method: str, path: str, body=None):
     except Exception as e:
         print(f"[config_manager] API unreachable ({method} {path}): {e}", flush=True)
         return None
+
+
+_WRITE_RETRIES = 3   # how many times to retry a failed PUT/DELETE before giving up
+_WRITE_RETRY_DELAY = 1.0  # seconds between retries
+
+
+def _request_write(method: str, path: str, body=None) -> bool:
+    """Like _request() but for write operations (PUT / DELETE).
+
+    Retries up to _WRITE_RETRIES times on failure and returns True if the
+    API confirmed the write, False if all attempts failed.  The local cache
+    is NOT touched here — callers must update it themselves before calling.
+    """
+    for attempt in range(1, _WRITE_RETRIES + 1):
+        result = _request(method, path, body)
+        if result is not None:
+            return True
+        if attempt < _WRITE_RETRIES:
+            time.sleep(_WRITE_RETRY_DELAY)
+    print(
+        f"[config_manager] ⚠️  Write failed after {_WRITE_RETRIES} attempts"
+        f" ({method} {path}) — change saved in memory only and will be"
+        " lost on bot restart.",
+        flush=True,
+    )
+    return False
 
 
 def _ensure_loaded():
@@ -188,17 +215,31 @@ class ConfigManager:
 
     # ── Write ─────────────────────────────────────────────────────────────────
 
-    def set(self, guild_id, key: str, value):
-        """Save a single setting. Persisted to the database immediately."""
+    def set(self, guild_id, key: str, value) -> bool:
+        """Save a single setting. Persisted to the database immediately.
+
+        Returns True if the value was successfully written to the database,
+        False if all retry attempts failed (value is still updated in the
+        local in-memory cache for the current session).
+
+        Example usage in a command::
+
+            if not cfg.set(guild.id, "welcome_channel", channel.id):
+                await ctx.send("⚠️ Guardado en memoria pero no en la base de datos — "
+                               "el cambio se perderá si el bot se reinicia.")
+        """
         with _lock:
             _ensure_loaded()
             gid = str(guild_id)
             fk  = self._full_key(key)
             _cache.setdefault(gid, {})[fk] = value
-            _request("PUT", f"/{gid}/{fk}", {"value": value})
+            return _request_write("PUT", f"/{gid}/{fk}", {"value": value})
 
-    def set_server(self, guild_id, config: dict):
-        """Replace ALL of this cog\'s settings for a server at once."""
+    def set_server(self, guild_id, config: dict) -> bool:
+        """Replace ALL of this cog's settings for a server at once.
+
+        Returns True if every write succeeded, False if any failed.
+        """
         with _lock:
             _ensure_loaded()
             gid = str(guild_id)
@@ -208,25 +249,33 @@ class ConfigManager:
                 if self._strip_ns(k) is not None:
                     del _cache[gid][k]
             # Clear in DB (module-scoped) then upsert new values
-            _request("DELETE", f"/{gid}?module={self._ns}")
+            ok = _request_write("DELETE", f"/{gid}?module={self._ns}")
             for k, v in config.items():
                 fk = self._full_key(k)
                 _cache[gid][fk] = v
-                _request("PUT", f"/{gid}/{fk}", {"value": v})
+                if not _request_write("PUT", f"/{gid}/{fk}", {"value": v}):
+                    ok = False
+            return ok
 
     # ── Delete ────────────────────────────────────────────────────────────────
 
-    def delete(self, guild_id, key: str):
-        """Remove a single setting key for a server."""
+    def delete(self, guild_id, key: str) -> bool:
+        """Remove a single setting key for a server.
+
+        Returns True if the database confirmed the deletion, False otherwise.
+        """
         with _lock:
             _ensure_loaded()
             gid = str(guild_id)
             fk  = self._full_key(key)
             _cache.get(gid, {}).pop(fk, None)
-            _request("DELETE", f"/{gid}/{fk}")
+            return _request_write("DELETE", f"/{gid}/{fk}")
 
-    def clear_server(self, guild_id):
-        """Delete ALL of this cog\'s settings for a server."""
+    def clear_server(self, guild_id) -> bool:
+        """Delete ALL of this cog's settings for a server.
+
+        Returns True if the database confirmed the deletion, False otherwise.
+        """
         with _lock:
             _ensure_loaded()
             gid = str(guild_id)
@@ -234,7 +283,7 @@ class ConfigManager:
                 for k in list(_cache[gid]):
                     if self._strip_ns(k) is not None:
                         del _cache[gid][k]
-            _request("DELETE", f"/{gid}?module={self._ns}")
+            return _request_write("DELETE", f"/{gid}?module={self._ns}")
 
 
 # ── Legacy module-level functions (namespace = "_global") ─────────────────────
@@ -248,14 +297,14 @@ def get(guild_id, key: str, default=None):
     return _LEGACY.get(guild_id, key, default)
 
 
-def set(guild_id, key: str, value):
+def set(guild_id, key: str, value) -> bool:
     """Legacy: save a setting into the shared ``_global`` namespace."""
-    _LEGACY.set(guild_id, key, value)
+    return _LEGACY.set(guild_id, key, value)
 
 
-def delete(guild_id, key: str):
+def delete(guild_id, key: str) -> bool:
     """Legacy: remove a setting from the shared ``_global`` namespace."""
-    _LEGACY.delete(guild_id, key)
+    return _LEGACY.delete(guild_id, key)
 
 
 def get_server(guild_id) -> dict:
@@ -263,14 +312,14 @@ def get_server(guild_id) -> dict:
     return _LEGACY.get_server(guild_id)
 
 
-def set_server(guild_id, config: dict):
+def set_server(guild_id, config: dict) -> bool:
     """Legacy: replace all ``_global`` namespace settings for a server."""
-    _LEGACY.set_server(guild_id, config)
+    return _LEGACY.set_server(guild_id, config)
 
 
-def clear_server(guild_id):
+def clear_server(guild_id) -> bool:
     """Legacy: delete all ``_global`` namespace settings for a server."""
-    _LEGACY.clear_server(guild_id)
+    return _LEGACY.clear_server(guild_id)
 
 
 def all_servers() -> dict:
