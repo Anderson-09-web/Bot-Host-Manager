@@ -227,6 +227,9 @@ async def delete_file(
     # Try as exact file first
     if await r2_service.object_exists(key):
         await r2_service.delete_object(key)
+        # Also delete the compiled .pyc from __pycache__ so Python doesn't
+        # load a stale bytecode version after the source file is removed.
+        await _delete_pycache_for(key)
         await _audit(db, user_id, "file_delete", f"Deleted file: {path}")
         # Purge bot_data for this cog module (only for cogs/*.py)
         await _purge_cog_bot_data(db, key)
@@ -239,6 +242,33 @@ async def delete_file(
         await _audit(db, user_id, "folder_delete", f"Deleted folder: {path} ({deleted} objects)")
 
     return {"success": True, "message": f"Deleted: {path}"}
+
+
+async def _delete_pycache_for(r2_key: str):
+    """Delete the compiled .pyc in __pycache__ that matches a .py source key.
+
+    When a .py file lives at ``parent/__pycache__/<stem>.cpython-*.pyc``,
+    Python can still import the cached bytecode even after the source is gone.
+    We proactively delete all matching .pyc files from R2 on every .py delete
+    so the bot never loads a stale cog.
+
+    Example: ``cogs/logs.py`` → deletes ``cogs/__pycache__/logs.cpython-*.pyc``
+    """
+    from pathlib import PurePosixPath
+    p = PurePosixPath(r2_key)
+    if p.suffix != ".py":
+        return
+    pycache_prefix = str(p.parent / "__pycache__" / p.stem)
+    try:
+        objects = await r2_service.list_objects(prefix=pycache_prefix)
+        pyc_keys = [{"Key": o["Key"]} for o in objects if o["Key"].endswith(".pyc")]
+        if pyc_keys:
+            # delete_prefix handles batching; we reuse delete_object for each
+            for item in pyc_keys:
+                await r2_service.delete_object(item["Key"])
+            logger.info("Deleted %d .pyc file(s) for %s", len(pyc_keys), r2_key)
+    except Exception as e:
+        logger.warning("Could not delete __pycache__ for %s: %s", r2_key, e)
 
 
 async def _purge_cog_bot_data(db: AsyncSession, r2_key: str):
