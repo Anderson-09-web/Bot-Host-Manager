@@ -57,9 +57,11 @@ _API_URL = os.getenv("PANEL_API_URL", "").rstrip("/")
 _BOT_KEY = os.getenv("PANEL_BOT_KEY", "")
 
 # ── Module-level cache (used by legacy functions) ─────────────────────────────
-_lock   = threading.Lock()
-_cache: dict = {}      # {guild_id: {full_key: value}}  — raw DB keys with namespace
-_loaded = False        # True once GET "" has been fetched
+_lock          = threading.Lock()
+_cache: dict   = {}      # {guild_id: {full_key: value}}  — raw DB keys with namespace
+_loaded        = False   # True once the DB was successfully fetched (or retries exhausted)
+_load_attempts = 0       # how many times _ensure_loaded has tried and failed
+_MAX_ATTEMPTS  = 8       # give up after this many consecutive failures
 
 
 # ── Internal ──────────────────────────────────────────────────────────────────
@@ -97,17 +99,38 @@ def _request(method: str, path: str, body=None):
 
 
 def _ensure_loaded():
-    """Lazy-load the full guild config from the database on first access."""
-    global _cache, _loaded
+    """Lazy-load the full guild config from the database on first access.
+
+    If the panel API is not yet ready (race condition at bot startup), this
+    method does NOT mark the cache as loaded — the next call will retry.
+    Only after _MAX_ATTEMPTS consecutive failures does it give up and run
+    in-memory-only for the session, to avoid hammering a permanently-down API.
+    """
+    global _cache, _loaded, _load_attempts
     if _loaded:
         return
     result = _request("GET", "")
     if result is not None:
         _cache = result
+        _loaded = True
+        _load_attempts = 0
         print(f"[config_manager] Loaded config for {len(_cache)} server(s) from database.", flush=True)
     else:
-        print("[config_manager] Warning: panel API unreachable — running in-memory only.", flush=True)
-    _loaded = True
+        _load_attempts += 1
+        if _load_attempts >= _MAX_ATTEMPTS:
+            # API appears permanently unreachable — stop retrying.
+            _loaded = True
+            print(
+                f"[config_manager] Warning: panel API unreachable after {_load_attempts} attempts"
+                " — running in-memory only for this session.",
+                flush=True,
+            )
+        else:
+            print(
+                f"[config_manager] Warning: panel API not ready yet"
+                f" (attempt {_load_attempts}/{_MAX_ATTEMPTS}) — will retry on next access.",
+                flush=True,
+            )
 
 
 # ── ConfigManager class (namespaced — recommended) ────────────────────────────
