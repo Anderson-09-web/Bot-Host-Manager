@@ -272,23 +272,60 @@ async def _delete_pycache_for(r2_key: str):
 
 
 async def _purge_cog_bot_data(db: AsyncSession, r2_key: str):
-    """If *r2_key* looks like ``cogs/<name>.py``, delete all bot_data rows
-    whose key starts with ``<name>/`` so stale config is gone immediately."""
+    """If *r2_key* looks like ``cogs/<name>.py``:
+    1. Delete all bot_data rows whose key starts with ``<name>/``
+       so stale config is gone immediately.
+    2. Delete all log_entry rows that mention the cog module name
+       so stale/error logs from the deleted cog stop appearing.
+    3. If the bot is currently running, restart it so the cog is
+       unloaded from memory and can no longer produce new errors.
+    """
     from pathlib import PurePosixPath
     from sqlalchemy import delete as sql_delete
     from app.models.bot_data import BotData
+    from app.models.log_entry import LogEntry
 
     p = PurePosixPath(r2_key)
     # Only act on cog Python files (cogs/<something>.py)
-    if p.parent.name == "cogs" and p.suffix == ".py":
-        module_name = p.stem
-        prefix = f"{module_name}/"
-        result = await db.execute(
-            sql_delete(BotData).where(BotData.key.like(f"{prefix}%"))
+    if p.parent.name != "cogs" or p.suffix != ".py":
+        return
+
+    module_name = p.stem
+
+    # 1. Purge bot_data config for this cog
+    prefix = f"{module_name}/"
+    result = await db.execute(
+        sql_delete(BotData).where(BotData.key.like(f"{prefix}%"))
+    )
+    await db.commit()
+    if result.rowcount:
+        logger.info("Purged %d bot_data row(s) for deleted cog '%s'", result.rowcount, module_name)
+
+    # 2. Purge log entries mentioning this cog so stale errors don't linger
+    log_patterns = [
+        f"%cogs.{module_name}%",
+        f"%cog: cogs.{module_name}%",
+        f"[{module_name}]%",
+    ]
+    from sqlalchemy import or_
+    log_result = await db.execute(
+        sql_delete(LogEntry).where(
+            or_(*(LogEntry.message.ilike(pat) for pat in log_patterns))
         )
-        await db.commit()
-        if result.rowcount:
-            logger.info("Purged %d bot_data row(s) for deleted cog '%s'", result.rowcount, module_name)
+    )
+    await db.commit()
+    if log_result.rowcount:
+        logger.info("Purged %d log row(s) mentioning deleted cog '%s'", log_result.rowcount, module_name)
+
+    # 3. Restart the bot if it's running so the cog is unloaded from memory
+    try:
+        from app.services.bot_manager import bot_manager, STATUS_ONLINE, STATUS_STARTING, STATUS_RESTARTING
+        if bot_manager.status in (STATUS_ONLINE, STATUS_STARTING, STATUS_RESTARTING):
+            logger.info("Restarting bot to unload deleted cog '%s'", module_name)
+            import asyncio
+            asyncio.create_task(bot_manager.restart())
+    except Exception as e:
+        logger.warning("Could not schedule bot restart after cog deletion: %s", e)
 
 
 @router.post("/rename")
