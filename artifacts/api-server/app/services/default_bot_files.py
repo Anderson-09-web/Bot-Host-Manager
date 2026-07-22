@@ -238,23 +238,40 @@ class ConfigManager:
     def set_server(self, guild_id, config: dict) -> bool:
         """Replace ALL of this cog's settings for a server at once.
 
+        Safe replace strategy: upsert new values FIRST, then remove stale
+        old keys.  This ensures the previous config is never erased from the
+        database before the new one is confirmed — a partial write failure
+        leaves the old data intact rather than producing an empty config.
+
         Returns True if every write succeeded, False if any failed.
         """
         with _lock:
             _ensure_loaded()
             gid = str(guild_id)
             _cache.setdefault(gid, {})
-            # Remove old keys for this namespace in cache
-            for k in list(_cache[gid]):
-                if self._strip_ns(k) is not None:
-                    del _cache[gid][k]
-            # Clear in DB (module-scoped) then upsert new values
-            ok = _request_write("DELETE", f"/{gid}?module={self._ns}")
+
+            # Determine which old keys will be removed (keys no longer in config)
+            new_fkeys = {self._full_key(k) for k in config}
+            stale_fkeys = [
+                fk for fk in list(_cache.get(gid, {}))
+                if self._strip_ns(fk) is not None and fk not in new_fkeys
+            ]
+
+            ok = True
+
+            # Step 1 — write new values first so DB is never empty during the op
             for k, v in config.items():
                 fk = self._full_key(k)
                 _cache[gid][fk] = v
                 if not _request_write("PUT", f"/{gid}/{fk}", {"value": v}):
                     ok = False
+
+            # Step 2 — only remove stale keys AFTER new values are confirmed
+            for fk in stale_fkeys:
+                _cache.get(gid, {}).pop(fk, None)
+                if not _request_write("DELETE", f"/{gid}/{fk}"):
+                    ok = False
+
             return ok
 
     # ── Delete ────────────────────────────────────────────────────────────────
