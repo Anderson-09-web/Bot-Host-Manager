@@ -68,7 +68,7 @@ async def get_all(
     return _rows_to_dict(rows)
 
 
-@router.put("/{guild_id}/{key}")
+@router.put("/{guild_id}/{key:path}")
 async def upsert_key(
     guild_id: str,
     key: str,
@@ -76,7 +76,12 @@ async def upsert_key(
     _: bool = Depends(verify_bot_key),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upsert a single setting for a guild."""
+    """Upsert a single setting for a guild.
+
+    The ``key`` path parameter uses ``:path`` so it can contain forward
+    slashes (e.g. ``setup/channel``).  The client URL-encodes them as
+    ``%2F`` to avoid routing ambiguity.
+    """
     body = await request.json()
     value = body.get("value")
 
@@ -98,14 +103,17 @@ async def upsert_key(
     return {"guild_id": guild_id, "key": key, "value": value}
 
 
-@router.delete("/{guild_id}/{key}")
+@router.delete("/{guild_id}/{key:path}")
 async def delete_key(
     guild_id: str,
     key: str,
     _: bool = Depends(verify_bot_key),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a single setting key for a guild."""
+    """Delete a single setting key for a guild.
+
+    Same ``:path`` convention as the PUT endpoint — keys may contain slashes.
+    """
     await db.execute(
         delete(BotData).where(BotData.guild_id == guild_id, BotData.key == key)
     )

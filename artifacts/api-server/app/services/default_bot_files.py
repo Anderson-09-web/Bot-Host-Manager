@@ -50,6 +50,7 @@ import json
 import os
 import threading
 import time
+import urllib.parse
 import urllib.request
 import urllib.error
 
@@ -233,7 +234,10 @@ class ConfigManager:
             gid = str(guild_id)
             fk  = self._full_key(key)
             _cache.setdefault(gid, {})[fk] = value
-            return _request_write("PUT", f"/{gid}/{fk}", {"value": value})
+            # URL-encode the key so slashes (e.g. "setup/channel") don't
+            # fragment the URL path and cause a silent 404.
+            encoded_fk = urllib.parse.quote(fk, safe="")
+            return _request_write("PUT", f"/{gid}/{encoded_fk}", {"value": value})
 
     def set_server(self, guild_id, config: dict) -> bool:
         """Replace ALL of this cog's settings for a server at once.
@@ -263,13 +267,15 @@ class ConfigManager:
             for k, v in config.items():
                 fk = self._full_key(k)
                 _cache[gid][fk] = v
-                if not _request_write("PUT", f"/{gid}/{fk}", {"value": v}):
+                encoded_fk = urllib.parse.quote(fk, safe="")
+                if not _request_write("PUT", f"/{gid}/{encoded_fk}", {"value": v}):
                     ok = False
 
             # Step 2 — only remove stale keys AFTER new values are confirmed
             for fk in stale_fkeys:
                 _cache.get(gid, {}).pop(fk, None)
-                if not _request_write("DELETE", f"/{gid}/{fk}"):
+                encoded_fk = urllib.parse.quote(fk, safe="")
+                if not _request_write("DELETE", f"/{gid}/{encoded_fk}"):
                     ok = False
 
             return ok
@@ -286,7 +292,8 @@ class ConfigManager:
             gid = str(guild_id)
             fk  = self._full_key(key)
             _cache.get(gid, {}).pop(fk, None)
-            return _request_write("DELETE", f"/{gid}/{fk}")
+            encoded_fk = urllib.parse.quote(fk, safe="")
+            return _request_write("DELETE", f"/{gid}/{encoded_fk}")
 
     def clear_server(self, guild_id) -> bool:
         """Delete ALL of this cog's settings for a server.
